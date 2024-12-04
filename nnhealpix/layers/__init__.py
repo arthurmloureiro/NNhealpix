@@ -31,17 +31,18 @@ class OrderMap(Layer):
 
     def call(self, x):
         """Implement the layer's logic"""
-        # x = tf.to_float(x)
         x = tf.cast(x, dtype=tf.float32)
         zero = tf.fill([tf.shape(x)[0], 1, tf.shape(x)[2]], 0.0)
         x1 = tf.concat([x, zero], axis=1)
         reordered = tf.gather(x1, self.indices, axis=1)
-        self.output_dim = reordered.shape
         return reordered
 
     def compute_output_shape(self, input_shape):
         """Compute the shape of the layer's output."""
-        return (input_shape[0], int(self.output_dim[1]), int(self.output_dim[2]))
+        batch_size = input_shape[0]
+        num_pixels = self.indices.shape[0]
+        num_channels = input_shape[2]
+        return (batch_size, num_pixels, num_channels)
 
     def get_config(self):
         "Return a dictionary containing the configuration for the layer."
