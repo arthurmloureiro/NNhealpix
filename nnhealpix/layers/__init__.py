@@ -10,17 +10,13 @@ import nnhealpix as nnh
 
 
 class OrderMap(Layer):
-    """Defines a Keras layer able to operate on HEALPix maps.
-
-    This layer has two purposes:
-
-    * It reorders the input map so that neighbour pixels are all adjacent;
-    * It performs 1D convolution using whatever the backend offers.
-    """
-
     def __init__(self, indices, **kwargs):
         self.input_indices = np.array(indices, dtype="int32")
-        Kindices = K.variable(indices, dtype="int32")
+        
+        # Validate indices during initialization and store for runtime clamping
+        self.max_index = np.max(self.input_indices)
+        self.min_index = np.min(self.input_indices)
+        Kindices = K.variable(self.input_indices, dtype="int32")
         self.indices = K.stop_gradient(Kindices)
         super(OrderMap, self).__init__(**kwargs)
 
@@ -32,9 +28,17 @@ class OrderMap(Layer):
     def call(self, x):
         """Implement the layer's logic"""
         x = tf.cast(x, dtype=tf.float32)
+
+        # Clamp indices dynamically to valid range
+        n_pixels = tf.shape(x)[1]  # Number of pixels in the input
+        clamped_indices = tf.clip_by_value(self.indices, 0, n_pixels - 1)
+
+        # Add an extra row of zeros for out-of-bounds indices
         zero = tf.fill([tf.shape(x)[0], 1, tf.shape(x)[2]], 0.0)
         x1 = tf.concat([x, zero], axis=1)
-        reordered = tf.gather(x1, self.indices, axis=1)
+
+        # Use clamped indices for reordering
+        reordered = tf.gather(x1, clamped_indices, axis=1)
         return reordered
 
     def compute_output_shape(self, input_shape):
@@ -45,7 +49,7 @@ class OrderMap(Layer):
         return (batch_size, num_pixels, num_channels)
 
     def get_config(self):
-        "Return a dictionary containing the configuration for the layer."
+        """Return a dictionary containing the configuration for the layer."""
         config = super(OrderMap, self).get_config()
         config.update({"indices": self.input_indices})
         return config
@@ -83,6 +87,35 @@ def Dgrade(nside_in, nside_out):
 
     return f
 
+def Upsample(nside_in, factor):
+    """Keras layer performing an upsampling of input HEALPix maps.
+
+    Args:
+        nside_in (integer): `NSIDE` parameter for the input maps.
+        factor (integer): Upsampling factor (e.g., 2 to double the resolution).
+
+    Returns:
+        A Keras-compatible layer function for upsampling.
+    """
+    nside_out = nside_in * factor  # New NSIDE after upsampling
+
+    file_in = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "ancillary_files",
+        "upgrade_from{}_to{}.npy".format(nside_in, nside_out),
+    )
+    try:
+        pixel_indices = np.load(file_in)
+    except:
+        pixel_indices = nnh.upgrade(nside_in, nside_out)
+
+    def f(x):
+        # Reorder the pixels to the upgraded resolution
+        y = OrderMap(pixel_indices)(x)
+        return y
+
+    return f
 
 def Pooling(nside_in, nside_out, layer1D, *args, **kwargs):
     """Keras layer performing a downgrade+custom pooling of input maps

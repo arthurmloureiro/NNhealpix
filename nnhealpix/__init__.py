@@ -24,6 +24,9 @@ def dgrade_file_name(nside_in, nside_out):
     """Return the full path to the datafile used to perform downgrading."""
     return os.path.join(DATADIR, "dgrade_from{}_to{}.npz".format(nside_in, nside_out))
 
+def upgrade_file_name(nside_in, nside_out):
+    """Return the full path to the datafile used to perform upgrading."""
+    return os.path.join(DATADIR, "upgrade_from{}_to{}.npz".format(nside_in, nside_out))
 
 def filter_file_name(nside, order):
     """Return the full path to the datafile used to apply the convolution filter."""
@@ -40,6 +43,66 @@ def __make_indices(x, y, xmin, xmax, ymin, ymax):
 
             idx += 1
 
+def upgrade(nside_in, nside_out):
+    """Return the list of indexes used to upgrade a HEALPix map.
+
+    Args:
+        * nside_in (int): ``NSIDE`` for the input map. It must be a
+          valid HEALPix value.
+        * nside_out (int): ``NSIDE`` for the output map. It must be a
+          valid HEALPix value.
+
+    Returns:
+        Array defining the re-ordering of the input map to obtain a map with
+        ``nside_out`` from a map with ``nside_in``.
+
+    Example::
+
+        import numpy, healpy, nnhealpix
+
+        nside_in = 1
+        nside_out = 2
+        idx = nnhealpix.upgrade(nside_in, nside_out)
+
+    """
+    assert hp.isnsideok(
+        nside_in, nest=True
+    ), f"invalid input nside {nside_in} in call to upgrade"
+
+    assert hp.isnsideok(
+        nside_out, nest=True
+    ), f"invalid output nside {nside_out} in call to upgrade"
+
+    assert nside_out > nside_in
+
+    try:
+        #print(f"Reading cache file {upgrade_file_name(nside_in, nside_out)}")
+        return __read_upgrade_cache(nside_in, nside_out)
+    except FileNotFoundError:
+        #print(f"Cache file {upgrade_file_name(nside_in, nside_out)} not found")
+        # Compute the number of sub-pixels per original pixel
+        fact = nside_out // nside_in
+        pixels_in = hp.nside2npix(nside_in)
+        stride = fact * fact
+        result = np.empty(pixels_in * stride, dtype="int")
+
+        # Loop over each pixel in the input resolution
+        for pixnum in range(pixels_in):
+            # Map the pixel in the lower resolution to sub-pixels in the higher resolution
+            x, y, f = hp.pix2xyf(nside_in, pixnum)
+            i = np.arange(fact * x, fact * (x + 1), dtype="int")
+            j = np.arange(fact * y, fact * (y + 1), dtype="int")
+            i, j = np.meshgrid(i, j)
+            f_spread = np.full_like(i, f)
+            result[(pixnum * stride):((pixnum + 1) * stride)] = hp.xyf2pix(
+                nside_out, i.flatten(), j.flatten(), f_spread.flatten()
+            )
+
+        # Cache the result for future use
+        file_name = upgrade_file_name(nside_in, nside_out)
+        print(f"Writing cache file {file_name}")
+        __write_ancillary_file(file_name, result)
+        return result
 
 def dgrade(nside_in, nside_out):
     """Return the list of indexes used to downgrade a HEALPix map
@@ -295,5 +358,20 @@ def __read_dgrade_cache(nside_in, nside_out):
     """
 
     file_name = dgrade_file_name(nside_in, nside_out)
+    with np.load(file_name) as f:
+        return f["arr"]
+
+def __read_upgrade_cache(nside_in, nside_out):
+    """Load the array used to to upgrade a map
+
+    Args:
+        * nside_in (int): desired value for the input ``NSIDE``.
+        * nside_out (int): desired value for the output ``NSIDE``.
+
+    Returns:
+        An array containing the requested array.    
+    """
+
+    file_name = upgrade_file_name(nside_in, nside_out)
     with np.load(file_name) as f:
         return f["arr"]
